@@ -61,23 +61,24 @@ syn_input = tf.placeholder(tf.float32, [None, input_dimension])
 # Define layer parameters
 
 w = tf.Variable(tf.truncated_normal([input_dimension, output_dimension], 
-                    stddev=1.0 / (FLAGS.input_dimension * FLAGS.input_dimension)), name="weights")
+                    stddev = 0.35, name="weights"))
 
 # Define placeholders for synthetic graident of weights and biases
 syn_grad_w = tf.placeholder(tf.float32,[input_dimension, output_dimension])
 
+y_ = tf.placeholder(tf.float32, [None, FLAGS.n_classes])
+y = tf.nn.softmax(tf.matmul(syn_input,w))
 # If this is the final layer
 if n_layer == n_layer_total:
-    y_ = tf.placeholder(tf.float32, [None, FLAGS.n_classes])
-    y = tf.nn.softmax(tf.matmul(syn_input,w))
+    
     ########################
     # Loss here ...
-    layer_output = -tf.reduce_mean(y_ * tf.log(tf.clip_by_value(y, 1e-10, 1.0)))
+    layer_output = tf.squared_difference(y,y_)
     ########################
     correct_prediction = tf.equal(tf.argmax(y,1), tf.argmax(y_,1))
     accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 else:
-    layer_output = tf.nn.relu(tf.matmul(syn_input, w))
+    layer_output = tf.nn.sigmoid(tf.matmul(syn_input, w))
 
 # Define the gradient from output to w and b
 grad_w = tf.gradients(layer_output, w)[0]
@@ -111,7 +112,7 @@ def calc_gpu_fraction(fraction_string):
     return fraction
 
 config = tf.ConfigProto()
-config.gpu_options.per_process_gpu_memory_fraction = calc_gpu_fraction('1/4')   
+config.gpu_options.per_process_gpu_memory_fraction = calc_gpu_fraction('1/3')   
 config.gpu_options.allow_growth = True
 
 with tf.Session(config=config) as sess:
@@ -128,15 +129,28 @@ with tf.Session(config=config) as sess:
 
         if n_layer != 1:
             syn_input_val = input_simulator.get_syn_input(batch_xs,iteration)
+
         else:
             syn_input_val = batch_xs.astype(np.float32)
             syn_input_val = append_ones(syn_input_val)
 
 
+
         if n_layer != n_layer_total:
             layer_output_val = layer_output.eval(feed_dict={syn_input:syn_input_val})
+
         else:
+            y_val = y.eval(feed_dict={syn_input:syn_input_val})
+
             layer_output_val = layer_output.eval(feed_dict={syn_input:syn_input_val,y_:batch_ys})
+            # print 'y_val:'
+            # print y_val
+            # print 'batch_ys:'
+            # print batch_ys
+            # print layer_output_val
+        # if n_layer == 1:
+        #     print sum(syn_input_val)
+        #     print sum(layer_output_val)
 
         ###########################
         # HTTP REQUEST send true input/the output of this layer
@@ -151,7 +165,6 @@ with tf.Session(config=config) as sess:
             # Update weights
             sess.run(update_w, feed_dict={syn_grad_w:syn_gradient.reshape(get_shape(w))})
 
-            curr_w_grad_val = grad_w.eval(feed_dict={syn_input:syn_input_val})
 
         else:
             # Update weights
@@ -168,6 +181,7 @@ with tf.Session(config=config) as sess:
             feed_dict = {syn_input:syn_input_val} if n_layer != n_layer_total else {syn_input:syn_input_val,y_:batch_ys}
             grad_curr_val = grad_curr.eval(feed_dict=feed_dict)
             grad_curr_val_ser= base64.b64encode(grad_curr_val)
+            # print grad_curr_val
 
             # print str(n_layer) + "\t" + str(iteration) + "\t" + grad_curr_val_ser
             insert_true_gradient(n_layer, iteration, grad_curr_val_ser)
@@ -185,6 +199,7 @@ with tf.Session(config=config) as sess:
                 true_input = np.frombuffer(r, dtype=np.float32).reshape((batch_size, get_shape(syn_input)[1]))
                 input_simulator.update_model(true_input,int(ite))
 
+
         ###########################
         ###########################
         # HTTP REQUEST, get true gradient to update M model
@@ -197,23 +212,19 @@ with tf.Session(config=config) as sess:
             if len(grad_succ_val) != 0:
                 r = base64.decodestring(grad_succ_val)
                 grad_succ_val = np.frombuffer(r, dtype=np.float32).reshape((batch_size, get_shape(grad_succ)[1]))
+
                 true_grad_val = true_grad.eval(feed_dict={syn_input:syn_input_val,grad_succ:grad_succ_val})
                 true_grad_val = true_grad_val.reshape(-1)
                 gradient_simulator.update_model(true_grad_val,int(ite))
         ###########################
 
-        if iteration % 100 == 0 and n_layer == n_layer_total:
-
-            if n_layer != 1:
-                test_xs = input_simulator.get_syn_input(mnist.test.images,iteration)
-                train_xs = input_simulator.get_syn_input(batch_xs,iteration)
-
-            else:
-                append_ones(mnist.test.images)
-                append_ones(batch_xs)
+        if iteration % 1000 == 0:
             print sum(w.eval())
             print str(n_layer) + "\t" + str(iteration)
-            print ("Test Loss: %2.2f" % sess.run(layer_output, feed_dict={syn_input:test_xs, y_: mnist.test.labels}))
+            # print ("Test Loss: %2.2f" % sess.run(layer_output, feed_dict={syn_input:test_xs, y_: mnist.test.labels}))
             # print("Train-Accuracy: %2.2f" % sess.run(accuracy, feed_dict={syn_input:train_xs, y_: batch_ys}))
-            # print("Test-Accuracy: %2.2f" % sess.run(accuracy, feed_dict={syn_input:test_xs, y_: mnist.test.labels}))
+            if n_layer == n_layer_total:
+                test_xs = input_simulator.get_syn_input(mnist.test.images,iteration)
+                train_xs = input_simulator.get_syn_input(batch_xs,iteration)
+                print("Test-Accuracy: %2.2f" % sess.run(accuracy, feed_dict={syn_input:test_xs, y_: mnist.test.labels}))
 
