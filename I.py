@@ -10,7 +10,7 @@ class I:
         # initial_dim: from original input(constant over different layers)
 
         self.sess = sess
-        self.optimizer = tf.train.AdamOptimizer()
+        self.optimizer = tf.train.AdamOptimizer(learning_rate=1e-5)
         
         self.x_batch = tf.placeholder(tf.float32, shape=(None, initial_dim))
         # self.true_input.shape = (1, num_nodes)
@@ -19,9 +19,12 @@ class I:
 
         last_inputs = self.x_batch
         # self.syn_input.shape = (1, num_nodes)
-        for i in xrange(n_layer):
-            last_inputs = tf.contrib.layers.fully_connected(inputs=last_inputs, num_outputs=10)
-        self.syn_input = tf.contrib.layers.fully_connected(inputs=last_inputs, num_outputs=input_size)
+        # for i in xrange(n_layer):
+        #     last_inputs = tf.contrib.layers.fully_connected(inputs=last_inputs, num_outputs=10)
+        self.syn_input = tf.contrib.layers.fully_connected(inputs=last_inputs,\
+         num_outputs=input_size, \
+         weights_initializer=tf.contrib.layers.xavier_initializer(), \
+         activation_fn = tf.nn.sigmoid)
 
         # Define loss function
         self.loss = tf.nn.l2_loss(self.true_input-self.syn_input)
@@ -41,7 +44,7 @@ class I:
 
         # Evaluate it, then reshape it to 1D array
         self.syn_input_val = self.syn_input.eval(session=self.sess, feed_dict={self.x_batch:x_batch_val})
-
+        
         return self.syn_input_val
     
     # true_gradient_val.shape = (num_parameters,)
@@ -49,8 +52,18 @@ class I:
         
         if ite in self.x_batch_vals:
             x_batch_val = self.x_batch_vals.pop(ite)
-            self.sess.run(self.train_step, feed_dict= {self.true_input:true_input_vals, self.x_batch: x_batch_val})
-            # print 'I: ' + str(self.loss.eval(feed_dict={self.true_input:true_input_vals, self.x_batch: x_batch_val}, session=self.sess))
+            # print "Syn input: " + str(sum(sum(syn_input_val)))
+            # print "True input: " + str(sum(sum(true_input_val)))
+            # self.sess.run(self.train_step, feed_dict= {self.true_input:true_input_vals, self.x_batch: x_batch_val})
+            # # print 'I: ' + str(self.loss.eval(feed_dict={self.true_input:true_input_vals, self.x_batch: x_batch_val}, session=self.sess))
         
-
-
+            h = self.sess.partial_run_setup([self.syn_input,self.train_step], [self.x_batch,self.true_input])
+            syn_input_val = self.sess.partial_run(h, self.syn_input, feed_dict = {self.x_batch:x_batch_val})
+            
+            # self.sess.partial_run(h, self.train_step, feed_dict = {self.true_gradient:true_gradient_val})
+            self.sess.run(self.train_step, feed_dict= \
+                {self.true_input: true_input_vals, self.syn_input: syn_input_val, self.x_batch:x_batch_val})
+            if ite % 100 == 0:
+                print "Syn input: " + str(sum(sum(syn_input_val)))
+                print "True input: " + str(sum(sum(true_input_vals)))
+                print 'Loss: ' + str(self.loss.eval(feed_dict = {self.true_input: true_input_vals, self.x_batch:x_batch_val}, session=self.sess))
